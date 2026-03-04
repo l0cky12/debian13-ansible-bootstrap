@@ -2,11 +2,11 @@
 
 Two playbooks for Debian 13 hardening and package bootstrap.
 
-## Files
+## Folder structure
 
-- `debian13_full.yml`: Includes Docker install, `liam` + `docker` users, and `/home/docker/docker`.
-- `debian13_nodocker.yml`: Same baseline setup but excludes Docker packages and the `docker` user.
-- `inventory.ini`: Example inventory.
+- `ansible/playbooks/debian13_full.yml`: Includes Docker install, `liam` + `docker` users, and `/home/docker/docker`.
+- `ansible/playbooks/debian13_nodocker.yml`: Same baseline setup but excludes Docker packages and the `docker` user.
+- `ansible/inventory/inventory.ini`: Example inventory.
 
 ## What gets configured
 
@@ -18,8 +18,8 @@ Two playbooks for Debian 13 hardening and package bootstrap.
 ## Run
 
 ```bash
-ansible-playbook -i inventory.ini debian13_full.yml
-ansible-playbook -i inventory.ini debian13_nodocker.yml
+ansible-playbook -i ansible/inventory/inventory.ini ansible/playbooks/debian13_full.yml
+ansible-playbook -i ansible/inventory/inventory.ini ansible/playbooks/debian13_nodocker.yml
 ```
 
 ## Important
