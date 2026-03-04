@@ -1,0 +1,12 @@
+pm_api_url          = "https://pve.example.local:8006/api2/json"
+pm_api_token_id     = "terraform@pve!terraform-packer"
+pm_api_token_secret = "REPLACE_ME"
+root_password        = "REPLACE_ME"
+bootstrap_user_password = "password"
+
+# Optional overrides
+# hostname      = "docker-test"
+# cores         = 4
+# memory        = 4096
+# ipv4_cidr     = "10.2.1.30/24"
+# provision_host = "10.2.1.30"

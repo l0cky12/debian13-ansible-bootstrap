@@ -1,6 +1,6 @@
 # Debian 13 + Proxmox Ansible Bootstrap
 
-Playbooks for Debian 13 hardening/bootstrap and Proxmox API automation setup.
+Playbooks for Debian 13 hardening/bootstrap, Proxmox API automation setup, and Terraform LXC provisioning.
 
 ## Folder structure
 
@@ -8,6 +8,7 @@ Playbooks for Debian 13 hardening/bootstrap and Proxmox API automation setup.
 - `ansible/playbooks/debian13_nodocker.yml`: Same baseline setup but excludes Docker packages and the `docker` user.
 - `ansible/playbooks/proxmox_terraform_packer_token.yml`: Creates Proxmox automation user/role/token for Terraform and Packer.
 - `ansible/inventory/inventory.ini`: Example inventory.
+- `main.tf` / `variables.tf` / `terraform.tfvars.example`: Terraform Proxmox LXC deployment in repo root.
 
 ## Debian 13 playbooks configure
 
@@ -30,6 +31,15 @@ Playbooks for Debian 13 hardening/bootstrap and Proxmox API automation setup.
 ansible-playbook -i ansible/inventory/inventory.ini ansible/playbooks/debian13_full.yml
 ansible-playbook -i ansible/inventory/inventory.ini ansible/playbooks/debian13_nodocker.yml
 ansible-playbook -i ansible/inventory/inventory.ini ansible/playbooks/proxmox_terraform_packer_token.yml
+```
+
+## Terraform run
+
+```bash
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform plan
+terraform apply
 ```
 
 ## Important
