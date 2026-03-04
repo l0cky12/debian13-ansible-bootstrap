@@ -1,0 +1,180 @@
+---
+- name: Debian 13 full setup (with Docker)
+  hosts: debian13
+  become: true
+  vars:
+    liam_password: "password"
+    docker_user_password: "password"
+    required_packages:
+      - neovim
+      - git
+      - net-tools
+      - bind9
+      - curl
+      - fail2ban
+      - gzip
+      - traceroute
+      - whois
+      - ufw
+      - unattended-upgrades
+      - openssh-server
+      - sudo
+      - ca-certificates
+    optional_packages:
+      - bat
+      - screenfetch
+    docker_packages:
+      - docker.io
+
+  handlers:
+    - name: restart ssh
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+
+    - name: restart fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
+
+  tasks:
+    - name: Update apt cache and upgrade packages
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name: "{{ required_packages }}"
+        state: present
+
+    - name: Install optional packages (skip if unavailable)
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ optional_packages }}"
+      ignore_errors: true
+
+    - name: Install Docker packages
+      ansible.builtin.apt:
+        name: "{{ docker_packages }}"
+        state: present
+
+    - name: Ensure docker group exists
+      ansible.builtin.group:
+        name: docker
+        state: present
+
+    - name: Ensure liam user exists with sudo and docker groups
+      ansible.builtin.user:
+        name: liam
+        state: present
+        shell: /bin/bash
+        create_home: true
+        groups: sudo,docker
+        append: false
+        password: "{{ liam_password | password_hash('sha512') }}"
+
+    - name: Ensure docker user exists with docker group only
+      ansible.builtin.user:
+        name: docker
+        state: present
+        shell: /bin/bash
+        create_home: true
+        groups: docker
+        append: false
+        password: "{{ docker_user_password | password_hash('sha512') }}"
+
+    - name: Create /home/docker/docker directory
+      ansible.builtin.file:
+        path: /home/docker/docker
+        state: directory
+        owner: docker
+        group: docker
+        mode: "0755"
+
+    - name: Ensure sshd settings are hardened
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        create: false
+        backrefs: false
+        validate: /usr/sbin/sshd -t -f %s
+      loop:
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication yes' }
+        - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication no' }
+        - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+        - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+        - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+        - { regexp: '^#?LoginGraceTime', line: 'LoginGraceTime 30' }
+      notify: restart ssh
+
+    - name: Ensure only desired SSH users are allowed
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?AllowUsers'
+        line: 'AllowUsers liam docker'
+        validate: /usr/sbin/sshd -t -f %s
+      notify: restart ssh
+
+    - name: Enable and start fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: started
+        enabled: true
+      notify: restart fail2ban
+
+    - name: Configure unattended-upgrades auto config
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        mode: "0644"
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Download-Upgradeable-Packages "1";
+          APT::Periodic::AutocleanInterval "7";
+          APT::Periodic::Unattended-Upgrade "1";
+
+    - name: Ensure unattended-upgrades service is enabled
+      ansible.builtin.service:
+        name: unattended-upgrades
+        state: started
+        enabled: true
+
+    - name: Set UFW default deny incoming
+      ansible.builtin.command: ufw default deny incoming
+      register: ufw_deny_in
+      changed_when: "'updated' in ufw_deny_in.stdout.lower() or 'changed' in ufw_deny_in.stdout.lower()"
+
+    - name: Set UFW default allow outgoing
+      ansible.builtin.command: ufw default allow outgoing
+      register: ufw_allow_out
+      changed_when: "'updated' in ufw_allow_out.stdout.lower() or 'changed' in ufw_allow_out.stdout.lower()"
+
+    - name: Allow OpenSSH through UFW
+      ansible.builtin.command: ufw allow OpenSSH
+      register: ufw_ssh
+      changed_when: "'added' in ufw_ssh.stdout.lower()"
+
+    - name: Allow DNS TCP through UFW
+      ansible.builtin.command: ufw allow 53/tcp
+      register: ufw_dns_tcp
+      changed_when: "'added' in ufw_dns_tcp.stdout.lower()"
+
+    - name: Allow DNS UDP through UFW
+      ansible.builtin.command: ufw allow 53/udp
+      register: ufw_dns_udp
+      changed_when: "'added' in ufw_dns_udp.stdout.lower()"
+
+    - name: Enable UFW
+      ansible.builtin.command: ufw --force enable
+      register: ufw_enable
+      changed_when: "'enabled' in ufw_enable.stdout.lower()"
+
+    - name: Enable Docker service
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
