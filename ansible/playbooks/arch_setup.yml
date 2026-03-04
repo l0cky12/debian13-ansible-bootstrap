@@ -1,0 +1,209 @@
+---
+- name: Arch Linux workstation/server setup
+  hosts: arch
+  become: true
+
+  vars:
+    liam_password: "mail"
+
+    pacman_packages:
+      - ansible
+      - base-devel
+      - bash-completion
+      - docker
+      - fail2ban
+      - git
+      - htop
+      - iproute2
+      - iputils
+      - kitty
+      - libvirt
+      - net-tools
+      - nodejs
+      - npm
+      - openssh
+      - packer
+      - powershell
+      - python
+      - qemu-full
+      - rsync
+      - samba
+      - screenfetch
+      - syncthing
+      - tailscale
+      - terraform
+      - tlp
+      - ufw
+      - unzip
+      - virt-manager
+      - wayland
+      - wget
+      - wlogout
+      - whois
+      - yt-dlp
+      - zsh
+
+    aur_packages:
+      - bashtop
+      - brave-bin
+      - obsidian
+      - openai-codex
+      - spotify
+      - sxiv
+      - yay-bin
+
+  handlers:
+    - name: restart sshd
+      ansible.builtin.service:
+        name: sshd
+        state: restarted
+
+    - name: restart fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
+
+  tasks:
+    - name: Full system update
+      ansible.builtin.command: pacman -Syu --noconfirm
+      changed_when: true
+
+    - name: Install pacman packages
+      ansible.builtin.command: >-
+        pacman -S --needed --noconfirm {{ pacman_packages | join(' ') }}
+      register: pacman_install
+      changed_when: "'there is nothing to do' not in pacman_install.stdout | lower"
+
+    - name: Ensure liam user exists with zsh and required groups
+      ansible.builtin.user:
+        name: liam
+        state: present
+        shell: /bin/zsh
+        create_home: true
+        groups: wheel,docker,libvirt
+        append: false
+        password: "{{ liam_password | password_hash('sha512') }}"
+
+    - name: Ensure sudo for wheel group is enabled
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers
+        regexp: '^#\s*%wheel\s+ALL=\(ALL:ALL\)\s+ALL'
+        line: '%wheel ALL=(ALL:ALL) ALL'
+        validate: /usr/bin/visudo -cf %s
+
+    - name: Check whether yay is installed
+      ansible.builtin.command: which yay
+      register: yay_check
+      changed_when: false
+      failed_when: false
+
+    - name: Build and install yay-bin from AUR when missing
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd /tmp
+        rm -rf yay-bin
+        git clone https://aur.archlinux.org/yay-bin.git
+        cd yay-bin
+        makepkg -si --noconfirm
+      args:
+        executable: /bin/bash
+      become_user: liam
+      when: yay_check.rc != 0
+
+    - name: Install AUR packages with yay
+      ansible.builtin.command: >-
+        yay -S --needed --noconfirm --answerclean None --answerdiff None {{ aur_packages | join(' ') }}
+      become_user: liam
+      register: aur_install
+      changed_when: "'there is nothing to do' not in aur_install.stdout | lower"
+      failed_when: false
+
+    - name: Harden sshd config
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        create: false
+      loop:
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication yes' }
+        - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication no' }
+        - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+        - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+        - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+      notify: restart sshd
+
+    - name: Ensure sshd service enabled and running
+      ansible.builtin.service:
+        name: sshd
+        state: started
+        enabled: true
+
+    - name: Configure fail2ban sshd jail
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.d/sshd.local
+        mode: "0644"
+        content: |
+          [sshd]
+          enabled = true
+          banaction = iptables-multiport
+          maxretry = 5
+          findtime = 10m
+          bantime = 1h
+      notify: restart fail2ban
+
+    - name: Ensure fail2ban service enabled and running
+      ansible.builtin.service:
+        name: fail2ban
+        state: started
+        enabled: true
+
+    - name: UFW default deny incoming
+      ansible.builtin.command: ufw default deny incoming
+      register: ufw_deny_in
+      changed_when: "'updated' in ufw_deny_in.stdout | lower or 'changed' in ufw_deny_in.stdout | lower"
+
+    - name: UFW default allow outgoing
+      ansible.builtin.command: ufw default allow outgoing
+      register: ufw_allow_out
+      changed_when: "'updated' in ufw_allow_out.stdout | lower or 'changed' in ufw_allow_out.stdout | lower"
+
+    - name: UFW allow OpenSSH
+      ansible.builtin.command: ufw allow OpenSSH
+      register: ufw_ssh
+      changed_when: "'added' in ufw_ssh.stdout | lower"
+
+    - name: Enable UFW
+      ansible.builtin.command: ufw --force enable
+      register: ufw_enable
+      changed_when: "'enabled' in ufw_enable.stdout | lower"
+
+    - name: Enable/start Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Enable/start libvirtd
+      ansible.builtin.service:
+        name: libvirtd
+        state: started
+        enabled: true
+
+    - name: Enable/start TLP
+      ansible.builtin.service:
+        name: tlp
+        state: started
+        enabled: true
+
+    - name: Enable/start tailscaled
+      ansible.builtin.service:
+        name: tailscaled
+        state: started
+        enabled: true
+
+    - name: Enable/start Syncthing for liam
+      ansible.builtin.service:
+        name: syncthing@liam
+        state: started
+        enabled: true
