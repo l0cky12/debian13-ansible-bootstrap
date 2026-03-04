@@ -2,8 +2,10 @@
 - name: Arch Linux workstation/server setup
   hosts: arch
   become: true
+  gather_facts: false
 
   vars:
+    ansible_python_interpreter: /usr/bin/python
     liam_password: "mail"
 
     pacman_packages:
@@ -23,7 +25,6 @@
       - npm
       - openssh
       - packer
-      - powershell
       - python
       - qemu-full
       - rsync
@@ -38,7 +39,6 @@
       - virt-manager
       - wayland
       - wget
-      - wlogout
       - whois
       - yt-dlp
       - zsh
@@ -48,9 +48,26 @@
       - brave-bin
       - obsidian
       - openai-codex
+      - powershell-bin
       - spotify
       - sxiv
+      - wlogout
       - yay-bin
+
+  pre_tasks:
+    - name: Ensure Python is available for Ansible modules
+      ansible.builtin.raw: |
+        if test -x /usr/bin/python; then
+          echo "python-present"
+        else
+          pacman -Sy --noconfirm python
+          echo "python-installed"
+        fi
+      register: python_bootstrap
+      changed_when: "'python-installed' in python_bootstrap.stdout"
+
+    - name: Gather facts after Python bootstrap
+      ansible.builtin.setup:
 
   handlers:
     - name: restart sshd
@@ -97,17 +114,33 @@
       changed_when: false
       failed_when: false
 
-    - name: Build and install yay-bin from AUR when missing
-      ansible.builtin.shell: |
-        set -euo pipefail
-        cd /tmp
-        rm -rf yay-bin
-        git clone https://aur.archlinux.org/yay-bin.git
-        cd yay-bin
-        makepkg -si --noconfirm
-      args:
-        executable: /bin/bash
+    - name: Remove stale yay-bin build directory
+      ansible.builtin.file:
+        path: /tmp/yay-bin
+        state: absent
+      when: yay_check.rc != 0
+
+    - name: Clone yay-bin AUR repository when yay is missing
+      ansible.builtin.git:
+        repo: https://aur.archlinux.org/yay-bin.git
+        dest: /tmp/yay-bin
+        force: true
       become_user: liam
+      when: yay_check.rc != 0
+
+    - name: Build yay-bin package as liam
+      ansible.builtin.command:
+        cmd: makepkg -s --noconfirm --needed
+        chdir: /tmp/yay-bin
+      become_user: liam
+      environment:
+        HOME: /home/liam
+      when: yay_check.rc != 0
+
+    - name: Install built yay-bin package as root
+      ansible.builtin.shell:
+        cmd: pacman -U --noconfirm /tmp/yay-bin/yay-bin-[0-9]*-x86_64.pkg.tar.zst
+        creates: /usr/bin/yay
       when: yay_check.rc != 0
 
     - name: Install AUR packages with yay
