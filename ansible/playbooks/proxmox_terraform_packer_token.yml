@@ -1,0 +1,121 @@
+---
+- name: Configure Proxmox user/role/token for Terraform and Packer
+  hosts: proxmox
+  become: true
+  gather_facts: false
+
+  vars:
+    proxmox_api_user: "terraform@pve"
+    proxmox_role_name: "TerraformPacker"
+    proxmox_token_id: "terraform-packer"
+    proxmox_token_privsep: false
+    proxmox_role_privs:
+      - Datastore.Allocate
+      - Datastore.AllocateSpace
+      - Datastore.Audit
+      - Pool.Allocate
+      - SDN.Use
+      - Sys.Audit
+      - VM.Allocate
+      - VM.Audit
+      - VM.Clone
+      - VM.Config.CDROM
+      - VM.Config.Cloudinit
+      - VM.Config.CPU
+      - VM.Config.Disk
+      - VM.Config.HWType
+      - VM.Config.Memory
+      - VM.Config.Network
+      - VM.Config.Options
+      - VM.Migrate
+      - VM.Monitor
+      - VM.PowerMgmt
+      - VM.Snapshot
+
+  tasks:
+    - name: Ensure pveum is available
+      ansible.builtin.command: which pveum
+      changed_when: false
+
+    - name: Check if Proxmox role exists
+      ansible.builtin.shell: |
+        set -o pipefail
+        pveum role list | awk 'NR>1 {print $1}' | grep -qx '{{ proxmox_role_name }}'
+      args:
+        executable: /bin/bash
+      register: role_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Create Proxmox role for Terraform/Packer
+      ansible.builtin.command: >-
+        pveum role add {{ proxmox_role_name }}
+        -privs "{{ proxmox_role_privs | join(' ') }}"
+      when: role_exists.rc != 0
+
+    - name: Check if Proxmox API user exists
+      ansible.builtin.shell: |
+        set -o pipefail
+        pveum user list | awk 'NR>1 {print $1}' | grep -qx '{{ proxmox_api_user }}'
+      args:
+        executable: /bin/bash
+      register: user_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Create Proxmox API user
+      ansible.builtin.command: >-
+        pveum user add {{ proxmox_api_user }}
+        -comment "Automation account for Terraform/Packer"
+      when: user_exists.rc != 0
+
+    - name: Assign role on root path
+      ansible.builtin.command: >-
+        pveum aclmod / -user {{ proxmox_api_user }} -role {{ proxmox_role_name }}
+      changed_when: false
+
+    - name: Check if API token exists
+      ansible.builtin.shell: |
+        set -o pipefail
+        pveum user token list {{ proxmox_api_user }} | awk 'NR>1 {print $1}' | grep -qx '{{ proxmox_token_id }}'
+      args:
+        executable: /bin/bash
+      register: token_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Create API token (secret is shown only once)
+      ansible.builtin.command: >-
+        pveum user token add {{ proxmox_api_user }} {{ proxmox_token_id }}
+        -privsep {{ 1 if proxmox_token_privsep else 0 }}
+        -comment "Terraform/Packer API token"
+        --output-format json
+      register: token_create
+      when: token_exists.rc != 0
+      changed_when: true
+
+    - name: Save generated token details to /root/proxmox-api-token.txt
+      ansible.builtin.copy:
+        dest: /root/proxmox-api-token.txt
+        mode: "0600"
+        content: |
+          Proxmox API user: {{ proxmox_api_user }}
+          Token ID: {{ proxmox_token_id }}
+          Full Token Name: {{ proxmox_api_user }}!{{ proxmox_token_id }}
+          Token Secret: {{ (token_create.stdout | from_json).value }}
+      when: token_exists.rc != 0
+
+    - name: Show token usage output (when newly created)
+      ansible.builtin.debug:
+        msg:
+          - "Token created for {{ proxmox_api_user }}"
+          - "pm_api_token_id={{ proxmox_api_user }}!{{ proxmox_token_id }}"
+          - "pm_api_token_secret={{ (token_create.stdout | from_json).value }}"
+      when: token_exists.rc != 0
+
+    - name: Notify if token already existed
+      ansible.builtin.debug:
+        msg:
+          - "Token {{ proxmox_api_user }}!{{ proxmox_token_id }} already exists."
+          - "Proxmox does not show token secrets again; create a new token if you need the secret."
+      when: token_exists.rc == 0
